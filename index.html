@@ -55,10 +55,24 @@
     .list li:first-child { border-top: 0; }
     .list .meta { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
     .list a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .bar { height: 6px; border-radius: 3px; background: var(--accent); margin-top: 4px; }
-    .lang { display: block; padding: 10px 16px; }
+    
+    
     footer { margin-top: 40px; color: var(--muted); font-size: 0.875rem; }
     .error { color: #d73a49; }
+    .orgs { display: flex; flex-wrap: wrap; gap: 10px; }
+    .org {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 12px 6px 6px;
+      background: var(--card); border: 1px solid var(--border); border-radius: 999px;
+      text-decoration: none; color: var(--text); font-weight: 600;
+    }
+    .org img { width: 28px; height: 28px; border-radius: 6px; }
+    .row-main { display: flex; flex-direction: column; min-width: 0; }
+    .row-main small { color: var(--muted); }
+    .badge { display: inline-block; font-size: 0.75rem; font-weight: 600; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); }
+    .badge.merged { color: #8250df; border-color: #8250df; }
+    .badge.open { color: #1a7f37; border-color: #1a7f37; }
+    .badge.closed { color: var(--muted); }
   </style>
 </head>
 <body>
@@ -72,24 +86,33 @@
       <a class="profile-link" href="https://github.com/palukku" rel="noopener">GitHub profile →</a>
     </header>
 
-    <h2>Overview</h2>
+    <h2>Open-source contributions (to other people's repos)</h2>
+    <div class="grid">
+      <div class="stat"><div class="value" id="c-merged">–</div><div class="label">Merged pull requests</div></div>
+      <div class="stat"><div class="value" id="c-prs">–</div><div class="label">Pull requests opened</div></div>
+      <div class="stat"><div class="value" id="c-issues">–</div><div class="label">Issues opened</div></div>
+      <div class="stat"><div class="value" id="c-repos">–</div><div class="label">Repos contributed to</div></div>
+    </div>
+
+    <h2>Organizations</h2>
+    <div class="orgs" id="orgs">Loading…</div>
+
+    <h2>Contributions by repository</h2>
+    <ul class="list" id="by-repo"><li>Loading…</li></ul>
+
+    <h2>Recent pull requests</h2>
+    <ul class="list" id="recent-prs"><li>Loading…</li></ul>
+
+    <h2>Own profile</h2>
     <div class="grid">
       <div class="stat"><div class="value" id="s-repos">–</div><div class="label">Public repos</div></div>
       <div class="stat"><div class="value" id="s-stars">–</div><div class="label">Stars received</div></div>
-      <div class="stat"><div class="value" id="s-forks">–</div><div class="label">Forks received</div></div>
       <div class="stat"><div class="value" id="s-followers">–</div><div class="label">Followers</div></div>
       <div class="stat"><div class="value" id="s-following">–</div><div class="label">Following</div></div>
-      <div class="stat"><div class="value" id="s-gists">–</div><div class="label">Public gists</div></div>
     </div>
 
-    <h2>Languages (by repo)</h2>
-    <ul class="list" id="languages"><li>Loading…</li></ul>
-
-    <h2>Recently updated repos</h2>
-    <ul class="list" id="recent"><li>Loading…</li></ul>
-
     <footer>
-      Live data from the GitHub API · refreshes automatically every 5 minutes ·
+      Public data from the GitHub API · refreshes every hour ·
       <span id="updated">not loaded yet</span>
     </footer>
   </main>
@@ -97,10 +120,12 @@
   <script>
     const USER = "palukku";
     const API = "https://api.github.com";
-    const REFRESH_MS = 5 * 60 * 1000;
+    const REFRESH_MS = 60 * 60 * 1000;
+    const CACHE_KEY = "gh-stats-v2";
 
     const $ = (id) => document.getElementById(id);
     const fmt = new Intl.NumberFormat("en-US");
+    const date = new Intl.DateTimeFormat("en-US", { dateStyle: "medium" });
 
     async function getJSON(url) {
       const res = await fetch(url, { headers: { Accept: "application/vnd.github+json" } });
@@ -108,13 +133,16 @@
       return res.json();
     }
 
-    async function getAllRepos() {
-      const repos = [];
-      for (let page = 1; ; page++) {
-        const batch = await getJSON(`${API}/users/${USER}/repos?per_page=100&page=${page}&sort=pushed`);
-        repos.push(...batch);
-        if (batch.length < 100) return repos;
+    async function getAll(path) {
+      const items = [];
+      for (let page = 1; page <= 10; page++) {
+        const sep = path.includes("?") ? "&" : "?";
+        const data = await getJSON(`${API}${path}${sep}per_page=100&page=${page}`);
+        const batch = Array.isArray(data) ? data : data.items;
+        items.push(...batch);
+        if (batch.length < 100) break;
       }
+      return items;
     }
 
     function el(tag, props = {}, ...children) {
@@ -123,53 +151,108 @@
       return node;
     }
 
-    function renderLanguages(repos) {
-      const counts = {};
-      for (const r of repos) if (r.language) counts[r.language] = (counts[r.language] || 0) + 1;
-      const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8);
-      const list = $("languages");
-      if (!entries.length) { list.replaceChildren(el("li", { textContent: "No data" })); return; }
-      const max = entries[0][1];
-      list.replaceChildren(...entries.map(([lang, n]) => {
-        const row = el("li", { className: "lang" });
-        const top = el("div", { style: "display:flex;justify-content:space-between" },
-          el("span", { textContent: lang }),
-          el("span", { className: "meta", textContent: `${n} ${n === 1 ? "repo" : "repos"}` }));
-        const bar = el("div", { className: "bar", style: `width:${(n / max) * 100}%` });
-        row.append(top, bar);
-        return row;
-      }));
+    // "https://api.github.com/repos/owner/name" -> "owner/name"
+    const repoName = (item) => item.repository_url.split("/repos/")[1];
+
+    async function load() {
+      const external = `-user:${USER}`;
+      const [user, repos, orgs, prs, issues] = await Promise.all([
+        getJSON(`${API}/users/${USER}`),
+        getAll(`/users/${USER}/repos`),
+        getJSON(`${API}/users/${USER}/orgs`),
+        getAll(`/search/issues?q=author:${USER}+type:pr+${external}&sort=created&order=desc`),
+        getAll(`/search/issues?q=author:${USER}+type:issue+${external}&sort=created&order=desc`),
+      ]);
+      // Keep only the fields the page uses, so the cache stays small.
+      const slim = (i) => ({
+        repo: repoName(i), title: i.title, url: i.html_url, state: i.state,
+        created: i.created_at, merged: i.pull_request ? i.pull_request.merged_at : null,
+      });
+      return {
+        time: Date.now(),
+        user: { login: user.login, name: user.name, bio: user.bio, avatar: user.avatar_url,
+                repos: user.public_repos, followers: user.followers, following: user.following },
+        stars: repos.filter((r) => !r.fork).reduce((s, r) => s + r.stargazers_count, 0),
+        orgs: orgs.map((o) => ({ login: o.login, avatar: o.avatar_url })),
+        prs: prs.map(slim),
+        issues: issues.map(slim),
+      };
     }
 
-    function renderRecent(repos) {
-      const list = $("recent");
-      const recent = repos.filter((r) => !r.fork).slice(0, 6);
-      if (!recent.length) { list.replaceChildren(el("li", { textContent: "No public repos" })); return; }
-      const date = new Intl.DateTimeFormat("en-US", { dateStyle: "medium" });
-      list.replaceChildren(...recent.map((r) => el("li", {},
-        el("a", { href: r.html_url, textContent: r.name, rel: "noopener" }),
-        el("span", { className: "meta", textContent: `★ ${fmt.format(r.stargazers_count)} · ${date.format(new Date(r.pushed_at))}` })
-      )));
+    function prBadge(pr) {
+      const kind = pr.merged ? "merged" : pr.state;
+      return el("span", { className: `badge ${kind}`, textContent: kind });
+    }
+
+    function render(d) {
+      $("avatar").src = d.user.avatar;
+      $("name").textContent = d.user.name || d.user.login;
+      $("bio").textContent = d.user.bio || "";
+      $("s-repos").textContent = fmt.format(d.user.repos);
+      $("s-followers").textContent = fmt.format(d.user.followers);
+      $("s-following").textContent = fmt.format(d.user.following);
+      $("s-stars").textContent = fmt.format(d.stars);
+
+      const merged = d.prs.filter((p) => p.merged);
+      $("c-merged").textContent = fmt.format(merged.length);
+      $("c-prs").textContent = fmt.format(d.prs.length);
+      $("c-issues").textContent = fmt.format(d.issues.length);
+
+      // Per-repository breakdown
+      const byRepo = {};
+      for (const p of d.prs) {
+        const r = (byRepo[p.repo] ||= { prs: 0, merged: 0, issues: 0 });
+        r.prs++;
+        if (p.merged) r.merged++;
+      }
+      for (const i of d.issues) (byRepo[i.repo] ||= { prs: 0, merged: 0, issues: 0 }).issues++;
+      const rows = Object.entries(byRepo).sort((a, b) =>
+        b[1].merged - a[1].merged || b[1].prs - a[1].prs || b[1].issues - a[1].issues);
+      $("c-repos").textContent = fmt.format(rows.length);
+      $("by-repo").replaceChildren(...(rows.length ? rows.map(([name, r]) => {
+        const parts = [];
+        if (r.prs) parts.push(`${r.merged}/${r.prs} PRs merged`);
+        if (r.issues) parts.push(`${r.issues} ${r.issues === 1 ? "issue" : "issues"}`);
+        return el("li", {},
+          el("a", { href: `https://github.com/${name}`, textContent: name, rel: "noopener" }),
+          el("span", { className: "meta", textContent: parts.join(" · ") }));
+      }) : [el("li", { textContent: "No public contributions found" })]));
+
+      // Organizations (public memberships only)
+      $("orgs").replaceChildren(...(d.orgs.length ? d.orgs.map((o) =>
+        el("a", { className: "org", href: `https://github.com/${o.login}`, rel: "noopener" },
+          el("img", { src: o.avatar, alt: "" }), o.login)
+      ) : ["No public organization memberships"]));
+
+      // Most recent pull requests
+      $("recent-prs").replaceChildren(...(d.prs.length ? d.prs.slice(0, 8).map((p) =>
+        el("li", {},
+          el("div", { className: "row-main" },
+            el("a", { href: p.url, textContent: p.title, rel: "noopener" }),
+            el("small", { textContent: `${p.repo} · ${date.format(new Date(p.created))}` })),
+          el("span", {}, prBadge(p)))
+      ) : [el("li", { textContent: "No pull requests yet" })]));
+
+      $("updated").className = "";
+      $("updated").textContent = "last updated: " + new Date(d.time).toLocaleString("en-US");
+    }
+
+    function readCache() {
+      try { return JSON.parse(localStorage.getItem(CACHE_KEY)); } catch { return null; }
     }
 
     async function refresh() {
+      const cached = readCache();
+      if (cached && Date.now() - cached.time < REFRESH_MS) {
+        render(cached);
+        return;
+      }
       try {
-        const [user, repos] = await Promise.all([getJSON(`${API}/users/${USER}`), getAllRepos()]);
-        $("avatar").src = user.avatar_url;
-        $("name").textContent = user.name || user.login;
-        $("bio").textContent = user.bio || "";
-        $("s-repos").textContent = fmt.format(user.public_repos);
-        $("s-followers").textContent = fmt.format(user.followers);
-        $("s-following").textContent = fmt.format(user.following);
-        $("s-gists").textContent = fmt.format(user.public_gists);
-        const own = repos.filter((r) => !r.fork);
-        $("s-stars").textContent = fmt.format(own.reduce((s, r) => s + r.stargazers_count, 0));
-        $("s-forks").textContent = fmt.format(own.reduce((s, r) => s + r.forks_count, 0));
-        renderLanguages(own);
-        renderRecent(repos);
-        $("updated").className = "";
-        $("updated").textContent = "last updated: " + new Date().toLocaleTimeString("en-US");
+        const data = await load();
+        try { localStorage.setItem(CACHE_KEY, JSON.stringify(data)); } catch {}
+        render(data);
       } catch (err) {
+        if (cached) render(cached);
         $("updated").className = "error";
         $("updated").textContent = "Failed to load: " + err.message;
       }
